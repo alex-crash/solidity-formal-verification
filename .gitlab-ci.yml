@@ -1,0 +1,161 @@
+stages:
+  - setup
+  - verification
+  - report
+
+.verification:default:
+  image: node:latest
+  cache: &verification_default_cache
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - .npm/
+      - node_modules/
+    policy: pull
+
+setup:verification:
+  stage: setup
+  extends: .verification:default
+  script:
+    - npm ci --cache .npm --prefer-offline
+  cache:
+    <<: *verification_default_cache
+    policy: pull-push
+
+.verification:parallel:
+  before_script: &verification_parallel_before_script
+    - export CONTRACT_SOURCE=${CONTRACT%|*}
+    - export CONTRACT_NAME=${CONTRACT#*|}
+  parallel:
+    matrix:
+      - CONTRACT:
+        - Overflow.sol|Overflow
+        - EtherStore.sol|EtherStore
+
+.verification:solc:
+  variables:
+    DEPS_INSTALL_CMD: "apt-get update && apt-get -y install software-properties-common"
+    SOLC_INSTALL_CMD: "add-apt-repository -y ppa:ethereum/ethereum && apt-get update && apt-get -y install solc"
+  before_script: &verification_solc_before_script
+    - command -v sudo && sudo sh -c "${DEPS_INSTALL_CMD}" || sh -c "${DEPS_INSTALL_CMD}"
+    - command -v sudo && sudo sh -c "${SOLC_INSTALL_CMD}" || sh -c "${SOLC_INSTALL_CMD}"
+
+.verification:
+  stage: verification
+  needs: ["setup:verification"]
+  extends:
+    - .verification:default
+    - .verification:parallel
+    - .verification:solc
+  before_script: &verification_before_script
+    - *verification_parallel_before_script
+    - *verification_solc_before_script
+    - export JOB_NAME=${CI_JOB_NAME#*:}
+    - export TOOL_NAME=${JOB_NAME%:*}
+    - mkdir -p {in,out}put/${TOOL_NAME}/
+  artifacts:
+    expire_in: 1 month
+    paths:
+      - input/
+      - output/
+
+verification:smt-checker:
+  image: ubuntu:latest
+  extends: .verification
+  before_script:
+    - *verification_before_script
+    - apt-get update && apt-get -y install gettext-base
+    - envsubst < templates/${TOOL_NAME}/input.json > input/${TOOL_NAME}/${CONTRACT}.json
+  script:
+    - solc --standard-json < input/${TOOL_NAME}/${CONTRACT}.json > output/${TOOL_NAME}/${CONTRACT}.json
+
+.verification:solhint:
+  extends: .verification
+  script:
+    - npm run solhint contracts/${CONTRACT_SOURCE}
+  allow_failure: true
+
+verification:slither:
+  image:
+    name: trailofbits/eth-security-toolbox:latest
+    entrypoint: [""]
+  extends: .verification
+  script:
+    - slither contracts/${CONTRACT_SOURCE} --solc-remaps @openzeppelin=node_modules/@openzeppelin --json output/${TOOL_NAME}/${CONTRACT}.json || export FAILED=true
+
+.verification:mythril:
+  image:
+    name: mythril/myth:latest
+    entrypoint: [""]
+  extends: .verification
+  script:
+    - myth analyze --solc-json templates/myth/input.json contracts/${CONTRACT_SOURCE}
+
+.verification:manticore:
+  image: trailofbits/manticore
+  extends: .verification
+  script:
+    - manticore contracts/${CONTRACT_SOURCE} --contract ${CONTRACT_NAME} --solc-remaps @openzeppelin=node_modules/@openzeppelin --workspace output/${TOOL_NAME}/${CONTRACT}
+
+.report:default:
+  image: openjdk:11-jre
+  cache: &report_cache
+    key: ${$CI_COMMIT_REF_SLUG}
+    paths:
+      - exporter/
+    policy: pull
+
+setup:report:
+  stage: setup
+  extends: .report:default
+  script:
+    - mkdir -p exporter/
+    - 'curl --output exporter/exporter.zip --header "PRIVATE-TOKEN: ${EXPORTER_REPO_TOKEN}" ${EXPORTER_URL}'
+    - export EXPORTER_PATH=$(zipinfo -1 exporter/exporter.zip)
+    - unzip -o exporter/exporter.zip -d exporter/ && unzip -o exporter/${EXPORTER_PATH} -d exporter/
+  cache:
+    <<: *report_cache
+    policy: pull-push
+
+.report:jq:
+  variables:
+    JQ_INSTALL_CMD: "apt-get update && apt-get -y install jq"
+  before_script: &report_jq_before_script
+    - command -v sudo && sudo sh -c "${JQ_INSTALL_CMD}" || sh -c "${JQ_INSTALL_CMD}"
+
+.report:
+  stage: report
+  needs: &report_needs
+    - setup:report
+  extends:
+    - .report:default
+    - .report:jq
+  before_script: &report_before_script
+    - *report_jq_before_script
+    - export EXPORTER_PATH=$(zipinfo -1 exporter/exporter.zip)
+    - export JOB_NAME=${CI_JOB_NAME#*:}
+    - export TOOL_NAME=${JOB_NAME%:*}
+    - mkdir -p report/${TOOL_NAME}/
+  artifacts:
+    expire_in: 1 month
+    paths:
+      - report/
+
+report:smt-checker:
+  needs:
+    - *report_needs
+    - verification:smt-checker
+  extends: .report
+  script:
+    - 'jq -n "{ errors: [ inputs.errors ] | add }" output/${TOOL_NAME}/*.json > report/${TOOL_NAME}/errors.json'
+    - exporter/$(zipinfo -1 exporter/${EXPORTER_PATH} */bin/service) --url ${EVENT_REST_API_URL} --sources . --result report/${TOOL_NAME}/errors.json
+
+report:slither:
+  needs:
+    - *report_needs
+    - verification:slither
+  extends: .report
+  script:
+    - 'jq -n "{ detectors: [ inputs.results.detectors ] | add }" output/${TOOL_NAME}/*.json > report/${TOOL_NAME}/detectors.json'
+    - echo "TODO exporter/$(zipinfo -1 exporter/${EXPORTER_PATH} */bin/service) --url ${EVENT_REST_API_URL} --sources . --result report/${TOOL_NAME}/errors.json"

@@ -1,0 +1,20 @@
+{
+  "name": "solidity-formal-verification",
+  "version": "1.0.0",
+  "description": "Solidity Formal Verification Sample",
+  "main": "index.js",
+  "scripts": {
+    "solhint": "solhint"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://gitlab.exactpro.com/yaalaLabs/solidity-formal-verification"
+  },
+  "keywords": [],
+  "author": "Alexey Chernikov <alexey.chernikov@exactprosystems.com>",
+  "license": "MIT",
+  "devDependencies": {
+    "@openzeppelin/contracts": "4.6.0",
+    "solhint": "3.3.7"
+  }
+}

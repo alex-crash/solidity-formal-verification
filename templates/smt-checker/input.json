@@ -1,0 +1,43 @@
+{
+  "language": "Solidity",
+  "sources": {
+    "contracts/${CONTRACT_SOURCE}": {
+      "urls": [
+        "contracts/${CONTRACT_SOURCE}"
+      ]
+    }
+  },
+  "settings": {
+    "remappings": [
+      "@openzeppelin=node_modules/@openzeppelin"
+    ],
+    "modelChecker": {
+      "contracts": {
+        "contracts/${CONTRACT_SOURCE}": [
+          "${CONTRACT_NAME}"
+        ]
+      },
+      "engine": "all",
+      "solvers": [
+        "cvc4",
+        "smtlib2",
+        "z3"
+      ],
+      "targets": [
+        "assert",
+        "underflow",
+        "overflow",
+        "divByZero",
+        "constantCondition",
+        "popEmptyArray",
+        "outOfBounds",
+        "balance"
+      ],
+      "invariants": [
+        "contract",
+        "reentrancy"
+      ],
+      "showUnproved": true
+    }
+  }
+}
